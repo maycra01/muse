@@ -116,12 +116,6 @@ eeg_stream = get_eeg_stream()
 timestamp_buffer = deque(maxlen=SAMPLE_RATE * BUFFER_LENGTH)
 eeg_buffers = [deque(maxlen=SAMPLE_RATE * BUFFER_LENGTH) for _ in range(NUM_CHANNELS)]
 
-alpha_buffer = deque(maxlen=SAMPLE_RATE * BUFFER_LENGTH)
-beta_buffer = deque(maxlen=SAMPLE_RATE * BUFFER_LENGTH)
-theta_buffer = deque(maxlen=SAMPLE_RATE * BUFFER_LENGTH)
-delta_buffer = deque(maxlen=SAMPLE_RATE * BUFFER_LENGTH)
-gamma_buffer = deque(maxlen=SAMPLE_RATE * BUFFER_LENGTH)
-
 fig, axarr = plt.subplots(4, 2, figsize=(10, 14))
 ax = axarr.flatten()[:7]  # Flatten and grab the first 7 axes
 
@@ -201,7 +195,7 @@ target_len = SAMPLE_RATE * BUFFER_LENGTH
 while len(timestamp_buffer) < target_len:
     # Pull samples in a batch
     for _ in range(BATCH_SIZE):
-        sample, timestamp = eeg_stream.pull_sample(timeout=0.01)
+        sample, timestamp = eeg_stream.pull_sample() # got rid of timeout=0.01
         if timestamp:
             samples.append(sample)
             timestamps.append(timestamp)
@@ -273,18 +267,11 @@ try:
             filtered_data['gamma'].append(gamma_data)
 
         # Now compute the average for each frequency band **across channels** immediately
-        alpha_avg = np.mean(filtered_data['alpha'], axis=0)
-        beta_avg = np.mean(filtered_data['beta'], axis=0)
-        theta_avg = np.mean(filtered_data['theta'], axis=0)
-        delta_avg = np.mean(filtered_data['delta'], axis=0)
-        gamma_avg = np.mean(filtered_data['gamma'], axis=0)
-
-        # Append the latest averaged value for each band to their respective buffers
-        alpha_buffer.append(alpha_avg[-1])  # Latest value of the alpha band
-        beta_buffer.append(beta_avg[-1])
-        theta_buffer.append(theta_avg[-1])
-        delta_buffer.append(delta_avg[-1])
-        gamma_buffer.append(gamma_avg[-1])
+        alpha_buffer = np.mean(filtered_data['alpha'], axis=0)
+        beta_buffer = np.mean(filtered_data['beta'], axis=0)
+        theta_buffer = np.mean(filtered_data['theta'], axis=0)
+        delta_buffer = np.mean(filtered_data['delta'], axis=0)
+        gamma_buffer = np.mean(filtered_data['gamma'], axis=0)
 
 
         # Plot every N frames to reduce CPU usage
