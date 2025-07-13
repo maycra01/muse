@@ -179,11 +179,11 @@ ax[4].set_title("Theta Band")
 ax[5].set_title("Delta Band")
 ax[6].set_title("Gamma Band")
 
-# ax[2].set_ylim(-60000, -50000)
-# ax[3].set_ylim(-1000000, 1)
-# ax[4].set_ylim(-1000000, 1)
-# ax[5].set_ylim(-1000000, 1)
-# ax[6].set_ylim(-120000, 70000)
+ax[2].set_ylim(-60000, -50000)
+ax[3].set_ylim(-1000000, 1)
+ax[4].set_ylim(-1000000, 1)
+ax[5].set_ylim(-1000000, 1)
+ax[6].set_ylim(-120000, 70000)
 
 
 for axis in ax[2:]:
@@ -219,20 +219,17 @@ try:
         relative_time = timestamps[-1] - t0 # use last timestamp in batch
         timestamp_buffer.append(relative_time)
 
+
         # Add samples to buffers
         for i in range(NUM_CHANNELS):  # Only use first 4 channels
             eeg_buffers[i].append(average_sample[i])
 
-        # if len(eeg_buffers[0]) < SAMPLE_RATE: # Don't proceed with loop until >1s of data
-        #     continue
 
-
-       # Apply the bandpass filters for each frequency band **inside the loop**
+        # Apply the bandpass filters for each frequency band **inside the loop**
         filtered_data = {'alpha': [], 'beta': [], 'theta': [], 'delta': [], 'gamma': []}
 
         # Filter each channel's data for the specific frequency bands
-        for channel_deque in eeg_buffers:
-            channel_data = np.array(channel_deque) # turn deque into array for processing
+        for channel_data in eeg_buffers:
             alpha_data = bandpass_filter(channel_data, *alpha_range, fs=SAMPLE_RATE)
             beta_data = bandpass_filter(channel_data, *beta_range, fs=SAMPLE_RATE)
             theta_data = bandpass_filter(channel_data, *theta_range, fs=SAMPLE_RATE)
@@ -302,7 +299,7 @@ try:
             for a in ax[1:]:
                 a.set_xlim(max(0, timestamp_buffer[-1] - BUFFER_LENGTH), timestamp_buffer[-1])
                 a.relim()
-                a.autoscale_view(scalex=False, scaley=True)
+                a.autoscale_view()
             plt.draw()
 
         # Append the sample and timestamp to the buffers
@@ -328,4 +325,3 @@ except KeyboardInterrupt:
     print("plot stopped.")
     plt.ioff()
     plt.show()
-
