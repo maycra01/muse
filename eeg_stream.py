@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import Stream
 from pylsl import  StreamInlet, resolve_streams
 from collections import deque
-from scipy.signal import butter, lfilter, sosfilt
+from scipy.signal import butter, lfilter, sosfilt, sosfiltfilt
 
 import time
 
@@ -65,9 +65,8 @@ def bandpass_filter(data, lowcut, highcut, fs, order=4):
     nyquist = 0.5 * fs
     low = lowcut / nyquist
     high = highcut / nyquist
-    b, a = butter(N=order,Wn=[low, high],btype='band', output='ba', fs=fs)
-    filtered = lfilter(b, a, data)
-    return filtered
+    sos = butter(N=order,Wn=[low, high],btype='band', output='sos', fs=fs)
+    return sosfiltfilt(sos, data)
 
 def update_plot(eeg_buffers, timestamp_buffer, lines, ax):
     if timestamp_buffer:
@@ -86,6 +85,9 @@ def update_plot(eeg_buffers, timestamp_buffer, lines, ax):
     ax.autoscale_view()
     plt.draw()
     plt.pause(0.01)
+
+
+
 
 eeg_stream = get_eeg_stream()
 
@@ -191,6 +193,38 @@ for axis in ax[2:]:
     axis.set_xlabel("Time (s)")
     axis.set_ylabel("Amplitude (μV)")
 
+samples = []
+timestamps = []
+
+target_len = SAMPLE_RATE * BUFFER_LENGTH
+
+while len(timestamp_buffer) < target_len:
+    # Pull samples in a batch
+    for _ in range(BATCH_SIZE):
+        sample, timestamp = eeg_stream.pull_sample(timeout=0.01)
+        if timestamp:
+            samples.append(sample)
+            timestamps.append(timestamp)
+
+    # Skip if no samples were pulled
+    if not samples:
+        continue
+
+    if t0 is None:
+        t0 = timestamps[0]
+
+    # Average the samples in the batch across all channels
+    average_sample = np.mean(samples, axis=0)
+
+    # Add the averaged sample to the buffers
+    relative_time = timestamps[-1] - t0 # use last timestamp in batch
+    timestamp_buffer.append(relative_time)
+
+    # Add samples to buffers
+    for i in range(NUM_CHANNELS):  # Only use first 4 channels
+        eeg_buffers[i].append(average_sample[i])
+
+print(len(eeg_buffers[0]), len(timestamp_buffer))
 
 try:
     while True:
@@ -208,10 +242,6 @@ try:
         if not samples:
             continue
 
-        # Initialize t0 to calculate relative time
-        if t0 is None:
-            t0 = timestamps[0]
-
         # Average the samples in the batch across all channels
         average_sample = np.mean(samples, axis=0)
 
@@ -222,10 +252,6 @@ try:
         # Add samples to buffers
         for i in range(NUM_CHANNELS):  # Only use first 4 channels
             eeg_buffers[i].append(average_sample[i])
-
-        # if len(eeg_buffers[0]) < SAMPLE_RATE: # Don't proceed with loop until >1s of data
-        #     continue
-
 
        # Apply the bandpass filters for each frequency band **inside the loop**
         filtered_data = {'alpha': [], 'beta': [], 'theta': [], 'delta': [], 'gamma': []}
