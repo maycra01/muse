@@ -6,7 +6,8 @@ from matplotlib.backends.backend_pdf import Stream
 from numpy.distutils.mingw32ccompiler import rc_name
 from pylsl import  StreamInlet, resolve_streams
 from collections import deque
-from scipy.signal import butter, welch, lfilter, sosfilt, sosfiltfilt, sosfilt_zi
+from scipy.signal import butter, welch, sosfiltfilt
+from scipy.integrate import trapezoid
 
 import time
 
@@ -19,6 +20,7 @@ FILTER_ORDER = 4
 DOWNSAMPLE = 2
 PLOT_SKIP = 5
 PADLEN = 3 * (2*FILTER_ORDER + 1)
+WINDOW_LEN = 2 # seconds for each Welch segment
 frame_count = 0
 t0 = None  # For relative time
 
@@ -42,6 +44,12 @@ sos_filters = {
     )
     for name, (low, high) in bands.items()
 }
+
+power_deques = {
+    name: deque(maxlen=SAMPLE_RATE * BUFFER_LENGTH)
+    for name in bands
+}
+
 
 # band_deques = {
 #     name: deque(maxlen=SAMPLE_RATE * BUFFER_LENGTH)
@@ -110,6 +118,12 @@ def update_plot(eeg_deque, timestamp_deque, lines, ax):
     plt.draw()
     plt.pause(0.01)
 
+def bandpower(x, band, window_len=WINDOW_LEN):
+    no_per_seg = int(window_len * SAMPLE_RATE)
+    freqs, Pxx = welch(x, fs=SAMPLE_RATE, nperseg=no_per_seg, noverlap=0)
+    low, high = band
+    mask = (freqs >= low) & (freqs <= high)
+    return trapezoid(Pxx[mask], freqs[mask])
 
 
 
@@ -141,7 +155,9 @@ timestamp_deque = deque(maxlen=SAMPLE_RATE * BUFFER_LENGTH)
 eeg_deque = [deque(maxlen=SAMPLE_RATE * BUFFER_LENGTH) for _ in range(NUM_CHANNELS)]
 
 fig, axarr = plt.subplots(4, 2, figsize=(10, 14))
-ax = axarr.flatten()[:7]  # Flatten and grab the first 7 axes
+axes = axarr.flatten() # Flatten and grab all the axes
+ax = axes[:7]
+ax_power = axes[7]
 
 plt.ion()
 fig.show()            # make the figure window appear now
@@ -210,6 +226,18 @@ for axis in ax[2:]:
     axis.set_xlim(0, BUFFER_LENGTH)
     axis.set_xlabel("Time (s)")
     axis.set_ylabel("Amplitude (μV)")
+
+power_lines = []
+for name, colour in zip(bands, ['b','g','r','c','m']):
+    line = ax_power.plot([], [], label=name)[0]
+    line.set_color(colour)
+    power_lines.append(line)
+
+ax_power.set_title("Band Power (Welch)")
+ax_power.set_xlabel("Time (s)")
+ax_power.set_ylabel("Time (s)")
+ax_power.legend(loc="upper right")
+
 
 try:
     while True:
@@ -331,10 +359,38 @@ try:
                 ax[idx].set_xlim(max(0, ts_full[-1] - BUFFER_LENGTH),
                                  ts_full[-1])
 
+            for name in bands:
+                filt = sosfiltfilt(sos_filters[name], data, axis=1)
+                mean_filt = filt.mean(axis=0)
+                p = bandpower(mean_filt, bands[name], window_len=WINDOW_LEN)
+                power_deques[name].append(p)
+
+            for (name, line, dq) in zip(bands, power_lines, power_deques.values()):
+                buf = np.array(dq)
+                if buf.size:
+                    xs = ts_full[-buf.size:]
+                    line.set_xdata(xs)
+                    line.set_ydata(buf)
+            ax_power.set_xlim(max(0, ts_full[-1] - BUFFER_LENGTH), ts_full[-1])
+
+            if 'beta' in power_deques:
+                beta_hist = power_deques['beta']
+                baseline = float(np.mean(beta_hist)) if beta_hist else 0.0
+                curr_beta = beta_hist[-1] if beta_hist else 0.0
+
+                if curr_beta < 0.8 * baseline:
+                    line_beta_combined.set_linewidth(3)
+                else:
+                    line_beta_combined.set_linewidth(1)
+
             # 3d) Redraw everything
             for a in ax:
                 a.relim()
                 a.autoscale_view(scalex=False)
+
+            ax_power.relim()
+            ax_power.autoscale_view(scalex=False)
+
             plt.draw()
             plt.pause(PLOT_INTERVAL)
 

@@ -4,6 +4,7 @@ from matplotlib.backends.backend_pdf import Stream
 from pylsl import StreamInlet, resolve_streams
 from collections import deque
 from scipy.signal import butter, lfilter, sosfilt, sosfiltfilt
+from scipy.integrate import trapezoid
 
 import time
 
@@ -34,3 +35,9 @@ print(sos_filters)
 
 for name in bands:
     print(bands[name])
+
+
+import numpy as np
+print(np.__version__)
+
+print(trapezoid([1,2,3], [0,1,2]))
