@@ -3,9 +3,10 @@ from os import times
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import Stream
+from numpy.distutils.mingw32ccompiler import rc_name
 from pylsl import  StreamInlet, resolve_streams
 from collections import deque
-from scipy.signal import butter, lfilter, sosfilt, sosfiltfilt
+from scipy.signal import butter, lfilter, sosfilt, sosfiltfilt, sosfilt_zi
 
 import time
 
@@ -14,6 +15,9 @@ SAMPLE_RATE = 256  # Muse 2 default
 BUFFER_LENGTH = 5  # seconds of data to show
 PLOT_INTERVAL = 0.05  # update every 50 ms
 BATCH_SIZE = 10  # Pull 10 samples at a time
+FILTER_ORDER = 4
+DOWNSAMPLE = 2
+PLOT_SKIP = 5
 frame_count = 0
 t0 = None  # For relative time
 
@@ -23,6 +27,30 @@ beta_range = (12, 30)  # Beta: 12-30 Hz
 theta_range = (4, 8)   # Theta: 4-8 Hz
 delta_range = (0.5, 4) # Delta: 0.5-4 Hz
 gamma_range = (30,100) # Gamma: 30-100Hz
+
+bands = {
+    'alpha': (8,  12),
+    'beta':  (12, 30),
+    'theta': (4,   8),
+    'delta': (0.5, 4),
+    'gamma': (30, 100),
+}
+
+sos_filters = {}
+filter_states = {}
+
+for name, (low,high) in bands.items():
+    sos = butter(FILTER_ORDER,
+                 [low, high],
+                 btype= 'band',
+                 fs=SAMPLE_RATE,
+                 output= 'sos')
+    sos_filters[name] = sos
+    filter_states[name] = [sosfilt_zi(sos) for _ in range(NUM_CHANNELS)]
+
+band_deques = {
+    name: deque(maxlen=SAMPLE_RATE * BUFFER_LENGTH)
+                for name in bands}
 
 def get_eeg_stream():
     print("looking for EEG streams...")
@@ -68,13 +96,13 @@ def bandpass_filter(data, lowcut, highcut, fs, order=4):
     sos = butter(N=order,Wn=[low, high],btype='band', output='sos', fs=fs)
     return sosfiltfilt(sos, data)
 
-def update_plot(eeg_buffers, timestamp_buffer, lines, ax):
-    if timestamp_buffer:
-        ax.set_xlim(max(0, timestamp_buffer[-1] - BUFFER_LENGTH), timestamp_buffer[-1])
+def update_plot(eeg_deque, timestamp_deque, lines, ax):
+    if timestamp_deque:
+        ax.set_xlim(max(0, timestamp_deque[-1] - BUFFER_LENGTH), timestamp_deque[-1])
 
     for i, line in enumerate(lines):
-        line.set_xdata(timestamp_buffer)
-        line.set_ydata(eeg_buffers[i])
+        line.set_xdata(timestamp_deque)
+        line.set_ydata(eeg_deque[i])
 
         # print(f"Line data (x): {lines[i].get_xdata()}")
         # print(f"Line data (y): {lines[i].get_ydata()}")
@@ -113,8 +141,8 @@ eeg_stream = get_eeg_stream()
 #     print(f"Sample timestamp: {timestamp}")
 
 # plt.ion()
-timestamp_buffer = deque(maxlen=SAMPLE_RATE * BUFFER_LENGTH)
-eeg_buffers = [deque(maxlen=SAMPLE_RATE * BUFFER_LENGTH) for _ in range(NUM_CHANNELS)]
+timestamp_deque = deque(maxlen=SAMPLE_RATE * BUFFER_LENGTH)
+eeg_deque = [deque(maxlen=SAMPLE_RATE * BUFFER_LENGTH) for _ in range(NUM_CHANNELS)]
 
 fig, axarr = plt.subplots(4, 2, figsize=(10, 14))
 ax = axarr.flatten()[:7]  # Flatten and grab the first 7 axes
@@ -187,41 +215,10 @@ for axis in ax[2:]:
     axis.set_xlabel("Time (s)")
     axis.set_ylabel("Amplitude (μV)")
 
-samples = []
-timestamps = []
-
-target_len = SAMPLE_RATE * BUFFER_LENGTH
-
-while len(timestamp_buffer) < target_len:
-    # Pull samples in a batch
-    for _ in range(BATCH_SIZE):
-        sample, timestamp = eeg_stream.pull_sample() # got rid of timeout=0.01
-        if timestamp:
-            samples.append(sample)
-            timestamps.append(timestamp)
-
-    # Skip if no samples were pulled
-    if not samples:
-        continue
-
-    if t0 is None:
-        t0 = timestamps[0]
-
-    # Average the samples in the batch across all channels
-    average_sample = np.mean(samples, axis=0)
-
-    # Add the averaged sample to the buffers
-    relative_time = timestamps[-1] - t0 # use last timestamp in batch
-    timestamp_buffer.append(relative_time)
-
-    # Add samples to buffers
-    for i in range(NUM_CHANNELS):  # Only use first 4 channels
-        eeg_buffers[i].append(average_sample[i])
-
-print(len(eeg_buffers[0]), len(timestamp_buffer))
-
 try:
     while True:
+        print(len(eeg_deque[0]), len(timestamp_deque)) # Sanity check
+
         samples = []
         timestamps = []
 
@@ -236,86 +233,113 @@ try:
         if not samples:
             continue
 
+        if t0 is None:
+            t0 = timestamps[0]
+
         # Average the samples in the batch across all channels
         average_sample = np.mean(samples, axis=0)
 
         # Add the averaged sample to the buffers
         relative_time = timestamps[-1] - t0 # use last timestamp in batch
-        timestamp_buffer.append(relative_time)
+        timestamp_deque.append(relative_time)
 
         # Add samples to buffers
-        for i in range(NUM_CHANNELS):  # Only use first 4 channels
-            eeg_buffers[i].append(average_sample[i])
+        for ch in range(NUM_CHANNELS):  # Only use first 4 channels
+            eeg_deque[ch].append(average_sample[ch])
 
-       # Apply the bandpass filters for each frequency band **inside the loop**
-        filtered_data = {'alpha': [], 'beta': [], 'theta': [], 'delta': [], 'gamma': []}
+       # # Apply the bandpass filters for each frequency band **inside the loop**
+       #  filtered_data = {'alpha': [], 'beta': [], 'theta': [], 'delta': [], 'gamma': []}
+       #
+       #  # Filter each channel's data for the specific frequency bands
+       #  for channel_deque in eeg_buffers:
+       #      channel_data = np.array(channel_deque) # turn deque into array for processing
+       #      alpha_data = bandpass_filter(channel_data, *alpha_range, fs=SAMPLE_RATE)
+       #      beta_data = bandpass_filter(channel_data, *beta_range, fs=SAMPLE_RATE)
+       #      theta_data = bandpass_filter(channel_data, *theta_range, fs=SAMPLE_RATE)
+       #      delta_data = bandpass_filter(channel_data, *delta_range, fs=SAMPLE_RATE)
+       #      gamma_data = bandpass_filter(channel_data, *gamma_range, fs=SAMPLE_RATE)
+       #
+       #      # Store the filtered data for each band in the dictionary
+       #      filtered_data['alpha'].append(alpha_data)
+       #      filtered_data['beta'].append(beta_data)
+       #      filtered_data['theta'].append(theta_data)
+       #      filtered_data['delta'].append(delta_data)
+       #      filtered_data['gamma'].append(gamma_data)
+       #
+       #  # Now compute the average for each frequency band **across channels** immediately
+       #  alpha_buffer = np.mean(filtered_data['alpha'], axis=0)
+       #  beta_buffer = np.mean(filtered_data['beta'], axis=0)
+       #  theta_buffer = np.mean(filtered_data['theta'], axis=0)
+       #  delta_buffer = np.mean(filtered_data['delta'], axis=0)
+       #  gamma_buffer = np.mean(filtered_data['gamma'], axis=0)
 
-        # Filter each channel's data for the specific frequency bands
-        for channel_deque in eeg_buffers:
-            channel_data = np.array(channel_deque) # turn deque into array for processing
-            alpha_data = bandpass_filter(channel_data, *alpha_range, fs=SAMPLE_RATE)
-            beta_data = bandpass_filter(channel_data, *beta_range, fs=SAMPLE_RATE)
-            theta_data = bandpass_filter(channel_data, *theta_range, fs=SAMPLE_RATE)
-            delta_data = bandpass_filter(channel_data, *delta_range, fs=SAMPLE_RATE)
-            gamma_data = bandpass_filter(channel_data, *gamma_range, fs=SAMPLE_RATE)
+        for name in bands:
+            sos = sos_filters[name]
+            states = filter_states[name]
+            outs = []
 
-            # Store the filtered data for each band in the dictionary
-            filtered_data['alpha'].append(alpha_data)
-            filtered_data['beta'].append(beta_data)
-            filtered_data['theta'].append(theta_data)
-            filtered_data['delta'].append(delta_data)
-            filtered_data['gamma'].append(gamma_data)
+            for ch in range(NUM_CHANNELS):
+                y, states[ch] = sosfilt(sos,
+                                        [average_sample[ch]],
+                                        zi=states[ch])
+                outs.append(y[0])
 
-        # Now compute the average for each frequency band **across channels** immediately
-        alpha_buffer = np.mean(filtered_data['alpha'], axis=0)
-        beta_buffer = np.mean(filtered_data['beta'], axis=0)
-        theta_buffer = np.mean(filtered_data['theta'], axis=0)
-        delta_buffer = np.mean(filtered_data['delta'], axis=0)
-        gamma_buffer = np.mean(filtered_data['gamma'], axis=0)
-
+            band_value = np.mean(outs)
+            band_deques[name].append(band_value)
 
         # Plot every N frames to reduce CPU usage
         frame_count += 1
-        if frame_count % 5 == 0:  # Adjust to control FPS
-            update_plot(eeg_buffers, timestamp_buffer, lines, ax[0])
+        if frame_count % PLOT_SKIP == 0:  # Adjust to control FPS
+            eeg_buffers = np.array(eeg_deque)
+            ts_full = np.array(timestamp_deque)
 
-            # Update all frequency band plots
-            line_alpha.set_xdata(timestamp_buffer)
-            line_alpha.set_ydata(alpha_buffer)
+            update_plot(eeg_deque, timestamp_deque, lines, ax[0])
 
-            line_beta.set_xdata(timestamp_buffer)
-            line_beta.set_ydata(beta_buffer)
+            for name, line in zip(
+                ['alpha', 'beta', 'theta', 'delta', 'gamma'],
+                [line_alpha, line_beta, line_theta, line_delta, line_gamma]
+            ):
+                band_deque = band_deques[name]
+                N = len(band_deque)
+                if N == 0:
+                    continue
 
-            line_theta.set_xdata(timestamp_buffer)
-            line_theta.set_ydata(theta_buffer)
+                band_buffer = np.array(band_deque)
+                band_times = ts_full[-N:]
 
-            line_delta.set_xdata(timestamp_buffer)
-            line_delta.set_ydata(delta_buffer)
+                band_buffer = band_buffer[::DOWNSAMPLE]
+                band_times =band_times[::DOWNSAMPLE]
 
-            line_gamma.set_xdata(timestamp_buffer)
-            line_gamma.set_ydata(gamma_buffer)
+                line.set_xdata(band_times)
+                line.set_ydata(band_buffer)
 
             # Also update the combined band plot (ax[1])
-            line_alpha_combined.set_xdata(timestamp_buffer)
-            line_alpha_combined.set_ydata(alpha_buffer)
 
-            line_beta_combined.set_xdata(timestamp_buffer)
-            line_beta_combined.set_ydata(beta_buffer)
+            for name, line in zip(
+                ['alpha', 'beta', 'theta', 'delta', 'gamma'],
+                [line_alpha_combined, line_beta_combined, line_theta_combined, line_delta_combined, line_gamma_combined]
+            ):
+                band_deque = band_deques[name]
+                N = len(band_deque)
+                if N == 0:
+                    continue
 
-            line_theta_combined.set_xdata(timestamp_buffer)
-            line_theta_combined.set_ydata(theta_buffer)
+                band_buffer = np.array(band_deque)
+                band_times = ts_full[-N:]
 
-            line_delta_combined.set_xdata(timestamp_buffer)
-            line_delta_combined.set_ydata(delta_buffer)
+                band_buffer = band_buffer[::DOWNSAMPLE]
+                band_times = band_times[::DOWNSAMPLE]
 
-            line_gamma_combined.set_xdata(timestamp_buffer)
-            line_gamma_combined.set_ydata(gamma_buffer)
+                line.set_xdata(band_times)
+                line.set_ydata(band_buffer)
+
 
             # Refresh plots
             for a in ax[1:]:
-                a.set_xlim(max(0, timestamp_buffer[-1] - BUFFER_LENGTH), timestamp_buffer[-1])
+                a.set_xlim(max(0, ts_full[-1] - BUFFER_LENGTH), ts_full[-1])
                 a.relim()
                 a.autoscale_view(scalex=False, scaley=True)
+
             plt.draw()
 
         # Append the sample and timestamp to the buffers
