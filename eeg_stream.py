@@ -16,8 +16,8 @@ BUFFER_LENGTH = 5  # seconds of data to show
 PLOT_INTERVAL = 0.05  # update every 50 ms
 BATCH_SIZE = 10  # Pull 10 samples at a time
 FILTER_ORDER = 4
-DOWNSAMPLE = 2
-PLOT_SKIP = 5
+DOWNSAMPLE = 6
+PLOT_SKIP = 2
 frame_count = 0
 t0 = None  # For relative time
 
