@@ -16,8 +16,9 @@ BUFFER_LENGTH = 5  # seconds of data to show
 PLOT_INTERVAL = 0.05  # update every 50 ms
 BATCH_SIZE = 10  # Pull 10 samples at a time
 FILTER_ORDER = 4
-DOWNSAMPLE = 6
-PLOT_SKIP = 2
+DOWNSAMPLE = 2
+PLOT_SKIP = 5
+PADLEN = 3 * (2*FILTER_ORDER + 1)
 frame_count = 0
 t0 = None  # For relative time
 
@@ -36,21 +37,21 @@ bands = {
     'gamma': (30, 100),
 }
 
-sos_filters = {}
-filter_states = {}
+sos_filters = {
+    name: butter(
+        N=FILTER_ORDER,
+        Wn=[low, high],
+        btype='band',
+        fs=SAMPLE_RATE,
+        output='sos'
+    )
+    for name, (low, high) in bands.items()
+}
 
-for name, (low,high) in bands.items():
-    sos = butter(FILTER_ORDER,
-                 [low, high],
-                 btype= 'band',
-                 fs=SAMPLE_RATE,
-                 output= 'sos')
-    sos_filters[name] = sos
-    filter_states[name] = [sosfilt_zi(sos) for _ in range(NUM_CHANNELS)]
+# band_deques = {
+#     name: deque(maxlen=SAMPLE_RATE * BUFFER_LENGTH)
+#                 for name in bands}
 
-band_deques = {
-    name: deque(maxlen=SAMPLE_RATE * BUFFER_LENGTH)
-                for name in bands}
 
 def get_eeg_stream():
     print("looking for EEG streams...")
@@ -147,6 +148,8 @@ eeg_deque = [deque(maxlen=SAMPLE_RATE * BUFFER_LENGTH) for _ in range(NUM_CHANNE
 fig, axarr = plt.subplots(4, 2, figsize=(10, 14))
 ax = axarr.flatten()[:7]  # Flatten and grab the first 7 axes
 
+plt.ion()
+fig.show()            # make the figure window appear now
 
 # create lines for each channel of raw eeg
 lines = [ax[0].plot([], [])[0] for _ in range(NUM_CHANNELS)]
@@ -208,7 +211,6 @@ ax[6].set_title("Gamma Band")
 # ax[4].set_ylim(-1000000, 1)
 # ax[5].set_ylim(-1000000, 1)
 # ax[6].set_ylim(-120000, 70000)
-
 
 for axis in ax[2:]:
     axis.set_xlim(0, BUFFER_LENGTH)
@@ -273,74 +275,74 @@ try:
        #  delta_buffer = np.mean(filtered_data['delta'], axis=0)
        #  gamma_buffer = np.mean(filtered_data['gamma'], axis=0)
 
-        for name in bands:
-            sos = sos_filters[name]
-            states = filter_states[name]
-            outs = []
-
-            for ch in range(NUM_CHANNELS):
-                y, states[ch] = sosfilt(sos,
-                                        [average_sample[ch]],
-                                        zi=states[ch])
-                outs.append(y[0])
-
-            band_value = np.mean(outs)
-            band_deques[name].append(band_value)
+        # for name in bands:
+        #     sos = sos_filters[name]
+        #     states = filter_states[name]
+        #     outs = []
+        #
+        #     for ch in range(NUM_CHANNELS):
+        #         y, states[ch] = sosfilt(sos,
+        #                                 [average_sample[ch]],
+        #                                 zi=states[ch])
+        #         outs.append(y[0])
+        #
+        #     band_value = np.mean(outs)
+        #     band_deques[name].append(band_value)
 
         # Plot every N frames to reduce CPU usage
         frame_count += 1
         if frame_count % PLOT_SKIP == 0:  # Adjust to control FPS
-            eeg_buffers = np.array(eeg_deque)
-            ts_full = np.array(timestamp_deque)
+            ts_full = np.array(timestamp_deque)  # shape (N,)
+            data = np.vstack(eeg_deque)  # shape (4, N)
+            N = data.shape[1]
 
-            update_plot(eeg_deque, timestamp_deque, lines, ax[0])
+            # only filtifilt once we have > PADLEN samples
+            if N <= PADLEN:
+                # skip filtering (you could fall back to sosfilt streaming here)
+                continue
 
-            for name, line in zip(
-                ['alpha', 'beta', 'theta', 'delta', 'gamma'],
-                [line_alpha, line_beta, line_theta, line_delta, line_gamma]
-            ):
-                band_deque = band_deques[name]
-                N = len(band_deque)
-                if N == 0:
-                    continue
+            # 3a) Raw EEG (ax[0])
+            for ch, line in enumerate(lines):
+                line.set_xdata(ts_full)
+                line.set_ydata(data[ch])
+            ax[0].set_xlim(max(0, ts_full[-1] - BUFFER_LENGTH),
+                           ts_full[-1])
 
-                band_buffer = np.array(band_deque)
-                band_times = ts_full[-N:]
+            # 3b) Combined bands (ax[1])
+            combined_lines = [
+                line_alpha_combined, line_beta_combined,
+                line_theta_combined, line_delta_combined,
+                line_gamma_combined
+            ]
+            for name, line in zip(bands, combined_lines):
+                filt = sosfiltfilt(sos_filters[name], data, axis=1)
+                mean_ts = filt.mean(axis=0)
+                xs = ts_full[::DOWNSAMPLE]
+                ys = mean_ts[::DOWNSAMPLE]
+                line.set_xdata(xs)
+                line.set_ydata(ys)
+            ax[1].set_xlim(max(0, ts_full[-1] - BUFFER_LENGTH),
+                           ts_full[-1])
 
-                band_buffer = band_buffer[::DOWNSAMPLE]
-                band_times =band_times[::DOWNSAMPLE]
+            # 3c) Individual band plots (ax[2]–ax[6])
+            indiv_lines = [line_alpha, line_beta, line_theta,
+                           line_delta, line_gamma]
+            for idx, (name, line) in enumerate(zip(bands, indiv_lines), start=2):
+                filt = sosfiltfilt(sos_filters[name], data, axis=1)
+                mean_ts = filt.mean(axis=0)
+                xs = ts_full[::DOWNSAMPLE]
+                ys = mean_ts[::DOWNSAMPLE]
+                line.set_xdata(xs)
+                line.set_ydata(ys)
+                ax[idx].set_xlim(max(0, ts_full[-1] - BUFFER_LENGTH),
+                                 ts_full[-1])
 
-                line.set_xdata(band_times)
-                line.set_ydata(band_buffer)
-
-            # Also update the combined band plot (ax[1])
-
-            for name, line in zip(
-                ['alpha', 'beta', 'theta', 'delta', 'gamma'],
-                [line_alpha_combined, line_beta_combined, line_theta_combined, line_delta_combined, line_gamma_combined]
-            ):
-                band_deque = band_deques[name]
-                N = len(band_deque)
-                if N == 0:
-                    continue
-
-                band_buffer = np.array(band_deque)
-                band_times = ts_full[-N:]
-
-                band_buffer = band_buffer[::DOWNSAMPLE]
-                band_times = band_times[::DOWNSAMPLE]
-
-                line.set_xdata(band_times)
-                line.set_ydata(band_buffer)
-
-
-            # Refresh plots
-            for a in ax[1:]:
-                a.set_xlim(max(0, ts_full[-1] - BUFFER_LENGTH), ts_full[-1])
+            # 3d) Redraw everything
+            for a in ax:
                 a.relim()
-                a.autoscale_view(scalex=False, scaley=True)
-
+                a.autoscale_view(scalex=False)
             plt.draw()
+            plt.pause(PLOT_INTERVAL)
 
         # Append the sample and timestamp to the buffers
         # if not timestamp_buffer:
@@ -364,5 +366,5 @@ try:
 except KeyboardInterrupt:
     print("plot stopped.")
     plt.ioff()
-    plt.show()
+
 
