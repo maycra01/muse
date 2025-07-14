@@ -6,7 +6,7 @@ from matplotlib.backends.backend_pdf import Stream
 from numpy.distutils.mingw32ccompiler import rc_name
 from pylsl import  StreamInlet, resolve_streams
 from collections import deque
-from scipy.signal import butter, lfilter, sosfilt, sosfiltfilt, sosfilt_zi
+from scipy.signal import butter, welch, lfilter, sosfilt, sosfiltfilt, sosfilt_zi
 
 import time
 
@@ -23,11 +23,6 @@ frame_count = 0
 t0 = None  # For relative time
 
 # Frequency ranges for each band
-alpha_range = (8, 12)  # Alpha: 8-12 Hz
-beta_range = (12, 30)  # Beta: 12-30 Hz
-theta_range = (4, 8)   # Theta: 4-8 Hz
-delta_range = (0.5, 4) # Delta: 0.5-4 Hz
-gamma_range = (30,100) # Gamma: 30-100Hz
 
 bands = {
     'alpha': (8,  12),
@@ -180,7 +175,6 @@ line_delta_combined.set_color('c')   # Cyan for Delta
 line_gamma_combined.set_color('m')   # Magenta for Gamma
 
 ax[1].set_xlim(0, BUFFER_LENGTH)
-ax[1].set_ylim(-200000, 200000)
 ax[1].set_title("All Frequency Bands Combined")
 ax[1].set_xlabel("Time (s)")
 ax[1].set_ylabel("Amplitude (μV)")
