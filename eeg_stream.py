@@ -17,7 +17,7 @@ BUFFER_LENGTH = 5  # seconds of data to show
 PLOT_INTERVAL = 0.05  # update every 50 ms
 BATCH_SIZE = 10  # Pull 10 samples at a time
 FILTER_ORDER = 4
-DOWNSAMPLE = 2
+DOWNSAMPLE = 4
 PLOT_SKIP = 5
 PADLEN = 3 * (2*FILTER_ORDER + 1)
 WINDOW_LEN = 2 # seconds for each Welch segment
@@ -50,6 +50,20 @@ power_deques = {
     for name in bands
 }
 
+nperseg = int(WINDOW_LEN * SAMPLE_RATE)
+
+freqs, _ = welch(
+    np.zeros(nperseg),
+    fs=SAMPLE_RATE,
+    nperseg=nperseg,
+    noverlap=0
+)
+
+# build a boolean mask for each band
+band_masks = {
+    name: (freqs >= low) & (freqs <= high)
+    for name, (low, high) in bands.items()
+}
 
 # band_deques = {
 #     name: deque(maxlen=SAMPLE_RATE * BUFFER_LENGTH)
@@ -118,13 +132,10 @@ def update_plot(eeg_deque, timestamp_deque, lines, ax):
     plt.draw()
     plt.pause(0.01)
 
-def bandpower(x, band, window_len=WINDOW_LEN):
-    no_per_seg = int(window_len * SAMPLE_RATE)
-    freqs, Pxx = welch(x, fs=SAMPLE_RATE, nperseg=no_per_seg, noverlap=0)
-    low, high = band
-    mask = (freqs >= low) & (freqs <= high)
+def bandpower(x, band_name):
+    _, Pxx = welch(x, fs=SAMPLE_RATE, nperseg=nperseg, noverlap=0)
+    mask = band_masks[band_name]
     return trapezoid(Pxx[mask], freqs[mask])
-
 
 
 eeg_stream = get_eeg_stream()
@@ -235,13 +246,13 @@ for name, colour in zip(bands, ['b','g','r','c','m']):
 
 ax_power.set_title("Band Power (Welch)")
 ax_power.set_xlabel("Time (s)")
-ax_power.set_ylabel("Time (s)")
+ax_power.set_ylabel("Time (μV²)")
 ax_power.legend(loc="upper right")
 
 
 try:
     while True:
-        print(len(eeg_deque[0]), len(timestamp_deque)) # Sanity check
+        #print(len(eeg_deque[0]), len(timestamp_deque)) # Sanity check
 
         samples = []
         timestamps = []
@@ -358,12 +369,13 @@ try:
                 line.set_ydata(ys)
                 ax[idx].set_xlim(max(0, ts_full[-1] - BUFFER_LENGTH),
                                  ts_full[-1])
-
-            for name in bands:
-                filt = sosfiltfilt(sos_filters[name], data, axis=1)
-                mean_filt = filt.mean(axis=0)
-                p = bandpower(mean_filt, bands[name], window_len=WINDOW_LEN)
-                power_deques[name].append(p)
+            if N >= nperseg:
+                for name in bands:
+                    filt = sosfiltfilt(sos_filters[name], data, axis=1)
+                    mean_filt = filt.mean(axis=0)
+                    p = bandpower(mean_filt, name)
+                    print(f"{name} power = {p:.2f}")  # should never be None
+                    power_deques[name].append(p)
 
             for (name, line, dq) in zip(bands, power_lines, power_deques.values()):
                 buf = np.array(dq)
@@ -375,8 +387,12 @@ try:
 
             if 'beta' in power_deques:
                 beta_hist = power_deques['beta']
-                baseline = float(np.mean(beta_hist)) if beta_hist else 0.0
-                curr_beta = beta_hist[-1] if beta_hist else 0.0
+                if beta_hist:
+                    baseline = sum(beta_hist) / len(beta_hist)
+                    curr_beta = beta_hist[-1]
+                else:
+                    baseline = 0.0
+                    curr_beta = 0.0
 
                 if curr_beta < 0.8 * baseline:
                     line_beta_combined.set_linewidth(3)
