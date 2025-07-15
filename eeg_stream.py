@@ -1,4 +1,5 @@
 from os import times
+from pickle import FALSE
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -21,16 +22,22 @@ DOWNSAMPLE = 4
 PLOT_SKIP = 5
 PADLEN = 3 * (2*FILTER_ORDER + 1)
 WINDOW_LEN = 2 # seconds for each Welch segment
+CALIBRATION_TIME = 5.0 # seconds for initial calibration
+DEPTH_THRESHOLD = 0.5  # this probably depends on the person?
+BLINK_THRESH = 75.0
+baseline_done = False
+base_alpha = base_theta = base_beta = None
+
 frame_count = 0
 t0 = None  # For relative time
 
 # Frequency ranges for each band
 
 bands = {
-    'alpha': (8,  12),
+    'alpha': (7,  13),
     'beta':  (12, 30),
-    'theta': (4,   8),
-    'delta': (0.5, 4),
+    'theta': (4,   6),
+    'delta': (1, 4),
     'gamma': (30, 100),
 }
 
@@ -274,6 +281,13 @@ try:
         # Average the samples in the batch across all channels
         average_sample = np.mean(samples, axis=0)
 
+        # mitigate the blinks/interference
+        for ch in range(NUM_CHANNELS):
+            v = average_sample[ch]
+            if abs(v) > BLINK_THRESH:
+                # either clamp
+                average_sample[ch] = np.sign(v) * BLINK_THRESH
+
         # Add the averaged sample to the buffers
         relative_time = timestamps[-1] - t0 # use last timestamp in batch
         timestamp_deque.append(relative_time)
@@ -374,8 +388,37 @@ try:
                     filt = sosfiltfilt(sos_filters[name], data, axis=1)
                     mean_filt = filt.mean(axis=0)
                     p = bandpower(mean_filt, name)
-                    print(f"{name} power = {p:.2f}")  # should never be None
+                    #print(f"{name} power = {p:.2f}")  # should never be None
                     power_deques[name].append(p)
+
+                if not baseline_done and ts_full[-1] >= CALIBRATION_TIME:
+                    base_alpha = sum(power_deques['alpha']) / len(power_deques['alpha'])
+                    base_theta = sum(power_deques['theta']) / len(power_deques['theta'])
+                    base_beta = sum(power_deques['beta']) / len(power_deques['beta'])
+                    baseline_done = True
+                    print(f"Calibrated ▶ α={base_alpha:.1f}, θ={base_theta:.1f}, β={base_beta:.1f}")
+
+                if baseline_done:
+                    curr_a = power_deques['alpha'][-1]
+                    curr_t = power_deques['theta'][-1]
+
+                    depth_index = (curr_a / base_alpha) - (curr_t / base_theta)
+
+                    if depth_index > DEPTH_THRESHOLD:
+                        print(f"meditating, index={depth_index:.2f}")
+                        # highlight the power‐plot α & θ lines by index
+                        power_lines[0].set_linewidth(3)  # alpha
+                        power_lines[2].set_linewidth(3)  # theta
+
+                    elif depth_index < 0:
+                        print(f"index=NEGATIVE{abs(depth_index):.2f}")
+                        for line in power_lines:
+                            line.set_linewidth(1)
+
+                    else:
+                        print(f"index={depth_index:.2f}")
+                        for line in power_lines:
+                            line.set_linewidth(1)
 
             for (name, line, dq) in zip(bands, power_lines, power_deques.values()):
                 buf = np.array(dq)
@@ -385,19 +428,6 @@ try:
                     line.set_ydata(buf)
             ax_power.set_xlim(max(0, ts_full[-1] - BUFFER_LENGTH), ts_full[-1])
 
-            if 'beta' in power_deques:
-                beta_hist = power_deques['beta']
-                if beta_hist:
-                    baseline = sum(beta_hist) / len(beta_hist)
-                    curr_beta = beta_hist[-1]
-                else:
-                    baseline = 0.0
-                    curr_beta = 0.0
-
-                if curr_beta < 0.8 * baseline:
-                    line_beta_combined.set_linewidth(3)
-                else:
-                    line_beta_combined.set_linewidth(1)
 
             # 3d) Redraw everything
             for a in ax:
