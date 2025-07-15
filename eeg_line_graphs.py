@@ -58,14 +58,12 @@ power_deques = {
 }
 
 nperseg = int(WINDOW_LEN * SAMPLE_RATE)
-nfft = 512
 
 freqs, _ = welch(
     np.zeros(nperseg),
     fs=SAMPLE_RATE,
     nperseg=nperseg,
-    noverlap=0,
-    nfft=nfft
+    noverlap=0
 )
 
 # build a boolean mask for each band
@@ -142,7 +140,7 @@ def update_plot(eeg_deque, timestamp_deque, lines, ax):
     plt.pause(0.01)
 
 def bandpower(x, band_name):
-    freqs_here, Pxx = welch(x, fs=SAMPLE_RATE, nperseg=nperseg, noverlap=0, nfft=nfft)
+    _, Pxx = welch(x, fs=SAMPLE_RATE, nperseg=nperseg, noverlap=0)
     mask = band_masks[band_name]
     return trapezoid(Pxx[mask], freqs[mask])
 
@@ -177,7 +175,7 @@ eeg_deque = [deque(maxlen=SAMPLE_RATE * BUFFER_LENGTH) for _ in range(NUM_CHANNE
 fig, axarr = plt.subplots(4, 2, figsize=(10, 14))
 axes = axarr.flatten() # Flatten and grab all the axes
 ax = axes[:7]
-
+ax_power = axes[7]
 
 plt.ion()
 fig.show()            # make the figure window appear now
@@ -247,8 +245,6 @@ for axis in ax[2:]:
     axis.set_xlabel("Time (s)")
     axis.set_ylabel("Amplitude (μV)")
 
-"""
-ax_power = axes[7]
 power_lines = []
 for name, colour in zip(bands, ['b','g','r','c','m']):
     line = ax_power.plot([], [], label=name)[0]
@@ -260,18 +256,6 @@ ax_power.set_xlabel("Time (s)")
 ax_power.set_ylabel("Time (μV²)")
 ax_power.legend(loc="upper right")
 
-"""
-
-# 8th axis: bar‐chart of *current* band powers
-ax_bar = axes[7]
-band_names = list(bands.keys())
-colors = ['b','g','r','c','m']
-# create empty bars
-bars = ax_bar.bar(band_names, [0]*5, color=colors)
-ax_bar.set_ylim(-10, 20)              # adjust this to your expected power range
-ax_bar.set_title("Live Band Power")
-ax_bar.set_ylabel("Power (μV²)")
-plt.setp(ax_bar.get_xticklabels(), rotation=45, ha="right")
 
 try:
     while True:
@@ -400,16 +384,14 @@ try:
                 ax[idx].set_xlim(max(0, ts_full[-1] - BUFFER_LENGTH),
                                  ts_full[-1])
             if N >= nperseg:
-                latest = []
                 for name in bands:
                     filt = sosfiltfilt(sos_filters[name], data, axis=1)
                     mean_filt = filt.mean(axis=0)
                     p = bandpower(mean_filt, name)
                     #print(f"{name} power = {p:.2f}")  # should never be None
                     power_deques[name].append(p)
-                    latest.append(p)
 
-                if (baseline_done == False) and (ts_full[-1] >= CALIBRATION_TIME):
+                if not baseline_done and ts_full[-1] >= CALIBRATION_TIME:
                     base_alpha = sum(power_deques['alpha']) / len(power_deques['alpha'])
                     base_theta = sum(power_deques['theta']) / len(power_deques['theta'])
                     base_beta = sum(power_deques['beta']) / len(power_deques['beta'])
@@ -422,7 +404,6 @@ try:
 
                     depth_index = (curr_a / base_alpha) - (curr_t / base_theta)
 
-                    """
                     if depth_index > DEPTH_THRESHOLD:
                         print(f"meditating, index={depth_index:.2f}")
                         # highlight the power‐plot α & θ lines by index
@@ -438,27 +419,7 @@ try:
                         print(f"index={depth_index:.2f}")
                         for line in power_lines:
                             line.set_linewidth(1)
-                    """
 
-                    if baseline_done and depth_index > DEPTH_THRESHOLD:
-                        highlight = ['y', 'y']  # pick a bright highlight color
-                        bars[0].set_color(highlight[0])  # alpha
-                        bars[2].set_color(highlight[1])  # theta
-                        print(f"meditating, index={depth_index:.2f}")
-
-                    elif depth_index < 0:
-                        print(f"index=NEGATIVE{abs(depth_index):.2f}")
-                        for bar, col in zip(bars, colors):
-                            bar.set_color(col)
-                    else:
-                        print(f"index={depth_index:.2f}")
-                        for bar, col in zip(bars, colors):
-                            bar.set_color(col)
-
-                    for bar, h in zip(bars, latest):
-                        bar.set_height(h)
-
-            """
             for (name, line, dq) in zip(bands, power_lines, power_deques.values()):
                 buf = np.array(dq)
                 if buf.size:
@@ -466,17 +427,15 @@ try:
                     line.set_xdata(xs)
                     line.set_ydata(buf)
             ax_power.set_xlim(max(0, ts_full[-1] - BUFFER_LENGTH), ts_full[-1])
-            
-            ax_power.relim()
-            ax_power.autoscale_view(scalex=False)
-            """
+
 
             # 3d) Redraw everything
             for a in ax:
                 a.relim()
                 a.autoscale_view(scalex=False)
 
-
+            ax_power.relim()
+            ax_power.autoscale_view(scalex=False)
 
             plt.draw()
             plt.pause(PLOT_INTERVAL)
@@ -503,5 +462,3 @@ try:
 except KeyboardInterrupt:
     print("plot stopped.")
     plt.ioff()
-
-
