@@ -14,7 +14,7 @@ import time
 
 NUM_CHANNELS = 4
 SAMPLE_RATE = 256  # Muse 2 default
-BUFFER_LENGTH = 5  # seconds of data to show
+BUFFER_LENGTH = 8  # seconds of data to show
 PLOT_INTERVAL = 0.05  # update every 50 ms
 BATCH_SIZE = 10  # Pull 10 samples at a time
 FILTER_ORDER = 4
@@ -22,7 +22,7 @@ DOWNSAMPLE = 4
 PLOT_SKIP = 5
 PADLEN = 3 * (2*FILTER_ORDER + 1)
 WINDOW_LEN = 2 # seconds for each Welch segment
-CALIBRATION_TIME = 5.0 # seconds for initial calibration
+CALIBRATION_TIME = 8.0 # seconds for initial calibration
 DEPTH_THRESHOLD = 0.5  # this probably depends on the person?
 BLINK_THRESH = 75.0
 baseline_done = False
@@ -58,13 +58,14 @@ power_deques = {
 }
 
 nperseg = int(WINDOW_LEN * SAMPLE_RATE)
+noverlap = nperseg // 2
 nfft = 512
 
 freqs, _ = welch(
     np.zeros(nperseg),
     fs=SAMPLE_RATE,
     nperseg=nperseg,
-    noverlap=0,
+    noverlap=noverlap,
     nfft=nfft
 )
 
@@ -142,7 +143,7 @@ def update_plot(eeg_deque, timestamp_deque, lines, ax):
     plt.pause(0.01)
 
 def bandpower(x, band_name):
-    freqs_here, Pxx = welch(x, fs=SAMPLE_RATE, nperseg=nperseg, noverlap=0, nfft=nfft)
+    freqs_here, Pxx = welch(x, fs=SAMPLE_RATE, nperseg=nperseg, noverlap=noverlap, nfft=nfft)
     mask = band_masks[band_name]
     return trapezoid(Pxx[mask], freqs[mask])
 
@@ -421,7 +422,9 @@ try:
                     curr_t = power_deques['theta'][-1]
 
                     depth_index = (curr_a / base_alpha) - (curr_t / base_theta)
-
+                    print(f"alpha:{power_deques['alpha'][-1]} | beta:{power_deques['beta'][-1]} "
+                          f"| theta:{power_deques['theta'][-1]} | gamma:{power_deques['gamma'][-1]}"
+                          f" | delta:{power_deques['delta'][-1]} ")
                     """
                     if depth_index > DEPTH_THRESHOLD:
                         print(f"meditating, index={depth_index:.2f}")
