@@ -426,7 +426,7 @@ try:
                           f"| theta:{power_deques['theta'][-1]} | gamma:{power_deques['gamma'][-1]}"
                           f" | delta:{power_deques['delta'][-1]} ")
                     """
-                    if depth_index > DEPTH_THRESHOLD:
+                    if depth_index > DEPTH_THRESHOLD: 
                         print(f"meditating, index={depth_index:.2f}")
                         # highlight the power‐plot α & θ lines by index
                         power_lines[0].set_linewidth(3)  # alpha
